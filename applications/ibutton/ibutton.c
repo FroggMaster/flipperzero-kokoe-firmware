@@ -5,6 +5,9 @@
 #include "m-string.h"
 #include <toolbox/path.h>
 #include <flipper_format/flipper_format.h>
+#include "rpc/rpc_app.h"
+
+#define TAG "iButtonApp"
 
 static const NotificationSequence sequence_blink_start_cyan = {
     &message_blink_start_10,
@@ -55,7 +58,7 @@ static void ibutton_make_app_folder(iButton* ibutton) {
     }
 }
 
-static bool ibutton_load_key_data(iButton* ibutton, string_t key_path) {
+static bool ibutton_load_key_data(iButton* ibutton, string_t key_path, bool show_dialog) {
     FlipperFormat* file = flipper_format_file_alloc(ibutton->storage);
     bool result = false;
     string_t data;
@@ -89,8 +92,37 @@ static bool ibutton_load_key_data(iButton* ibutton, string_t key_path) {
     flipper_format_free(file);
     string_clear(data);
 
-    if(!result) {
+    if((!result) && (show_dialog)) {
         dialog_message_show_storage_error(ibutton->dialogs, "Cannot load\nkey file");
+    }
+
+    return result;
+}
+
+static bool ibutton_rpc_command_callback(RpcAppSystemEvent event, const char* arg, void* context) {
+    furi_assert(context);
+    iButton* ibutton = context;
+
+    bool result = false;
+
+    if(event == RpcAppEventSessionClose) {
+        rpc_system_app_set_callback(ibutton->rpc_ctx, NULL, NULL);
+        ibutton->rpc_ctx = NULL;
+        view_dispatcher_send_custom_event(ibutton->view_dispatcher, iButtonCustomEventRpcExit);
+        result = true;
+    } else if(event == RpcAppEventAppExit) {
+        view_dispatcher_send_custom_event(ibutton->view_dispatcher, iButtonCustomEventRpcExit);
+        result = true;
+    } else if(event == RpcAppEventLoadFile) {
+        if(arg) {
+            string_set_str(ibutton->file_path, arg);
+            if(ibutton_load_key_data(ibutton, ibutton->file_path, false)) {
+                ibutton_worker_emulate_start(ibutton->key_worker, ibutton->key);
+                view_dispatcher_send_custom_event(
+                    ibutton->view_dispatcher, iButtonCustomEventRpcLoad);
+                result = true;
+            }
+        }
     }
 
     return result;
@@ -131,13 +163,11 @@ iButton* ibutton_alloc() {
     view_dispatcher_set_tick_event_callback(
         ibutton->view_dispatcher, ibutton_tick_event_callback, 100);
 
-    ibutton->gui = furi_record_open("gui");
-    view_dispatcher_attach_to_gui(
-        ibutton->view_dispatcher, ibutton->gui, ViewDispatcherTypeFullscreen);
+    ibutton->gui = furi_record_open(RECORD_GUI);
 
-    ibutton->storage = furi_record_open("storage");
-    ibutton->dialogs = furi_record_open("dialogs");
-    ibutton->notifications = furi_record_open("notification");
+    ibutton->storage = furi_record_open(RECORD_STORAGE);
+    ibutton->dialogs = furi_record_open(RECORD_DIALOGS);
+    ibutton->notifications = furi_record_open(RECORD_NOTIFICATION);
 
     ibutton->key = ibutton_key_alloc();
     ibutton->key_worker = ibutton_worker_alloc();
@@ -194,16 +224,16 @@ void ibutton_free(iButton* ibutton) {
     view_dispatcher_free(ibutton->view_dispatcher);
     scene_manager_free(ibutton->scene_manager);
 
-    furi_record_close("storage");
+    furi_record_close(RECORD_STORAGE);
     ibutton->storage = NULL;
 
-    furi_record_close("notification");
+    furi_record_close(RECORD_NOTIFICATION);
     ibutton->notifications = NULL;
 
-    furi_record_close("dialogs");
+    furi_record_close(RECORD_DIALOGS);
     ibutton->dialogs = NULL;
 
-    furi_record_close("gui");
+    furi_record_close(RECORD_GUI);
     ibutton->gui = NULL;
 
     ibutton_worker_stop_thread(ibutton->key_worker);
@@ -226,7 +256,7 @@ bool ibutton_file_select(iButton* ibutton) {
         true);
 
     if(success) {
-        success = ibutton_load_key_data(ibutton, ibutton->file_path);
+        success = ibutton_load_key_data(ibutton, ibutton->file_path, true);
     }
 
     return success;
@@ -334,23 +364,45 @@ int32_t ibutton_app(void* p) {
     ibutton_make_app_folder(ibutton);
 
     bool key_loaded = false;
+    bool rpc_mode = false;
 
     if(p) {
-        string_set_str(ibutton->file_path, (const char*)p);
-        if(ibutton_load_key_data(ibutton, ibutton->file_path)) {
-            key_loaded = true;
-            // TODO: Display an error if the key from p could not be loaded
+        uint32_t rpc_ctx = 0;
+        if(sscanf(p, "RPC %lX", &rpc_ctx) == 1) {
+            FURI_LOG_D(TAG, "Running in RPC mode");
+            ibutton->rpc_ctx = (void*)rpc_ctx;
+            rpc_mode = true;
+            rpc_system_app_set_callback(ibutton->rpc_ctx, ibutton_rpc_command_callback, ibutton);
+            rpc_system_app_send_started(ibutton->rpc_ctx);
+        } else {
+            string_set_str(ibutton->file_path, (const char*)p);
+            if(ibutton_load_key_data(ibutton, ibutton->file_path, true)) {
+                key_loaded = true;
+                // TODO: Display an error if the key from p could not be loaded
+            }
         }
     }
 
-    if(key_loaded) {
-        scene_manager_next_scene(ibutton->scene_manager, iButtonSceneEmulate);
+    if(rpc_mode) {
+        view_dispatcher_attach_to_gui(
+            ibutton->view_dispatcher, ibutton->gui, ViewDispatcherTypeDesktop);
+        scene_manager_next_scene(ibutton->scene_manager, iButtonSceneRpc);
     } else {
-        scene_manager_next_scene(ibutton->scene_manager, iButtonSceneStart);
+        view_dispatcher_attach_to_gui(
+            ibutton->view_dispatcher, ibutton->gui, ViewDispatcherTypeFullscreen);
+        if(key_loaded) {
+            scene_manager_next_scene(ibutton->scene_manager, iButtonSceneEmulate);
+        } else {
+            scene_manager_next_scene(ibutton->scene_manager, iButtonSceneStart);
+        }
     }
 
     view_dispatcher_run(ibutton->view_dispatcher);
 
+    if(ibutton->rpc_ctx) {
+        rpc_system_app_set_callback(ibutton->rpc_ctx, NULL, NULL);
+        rpc_system_app_send_exited(ibutton->rpc_ctx);
+    }
     ibutton_free(ibutton);
     return 0;
 }
