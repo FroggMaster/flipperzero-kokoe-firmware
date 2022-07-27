@@ -41,13 +41,18 @@ typedef enum {
     SubGhzCustomEventSceneShowOnlyRX,
     SubGhzCustomEventSceneAnalyzerLock,
     SubGhzCustomEventSceneAnalyzerUnlock,
+    SubGhzCustomEventSceneSettingLock,
 
     SubGhzCustomEventSceneExit,
     SubGhzCustomEventSceneStay,
 
+    SubGhzCustomEventSceneRpcLoad,
+
     SubGhzCustomEventViewReceiverOK,
     SubGhzCustomEventViewReceiverConfig,
     SubGhzCustomEventViewReceiverBack,
+    SubGhzCustomEventViewReceiverOffDisplay,
+    SubGhzCustomEventViewReceiverUnlock,
 
     SubGhzCustomEventViewReadRAWBack,
     SubGhzCustomEventViewReadRAWIDLE,

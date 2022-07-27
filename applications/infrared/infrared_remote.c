@@ -1,11 +1,13 @@
 #include "infrared_remote.h"
 
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <m-string.h>
 #include <m-array.h>
 #include <toolbox/path.h>
 #include <storage/storage.h>
-#include <furi/common_defines.h>
+#include <core/common_defines.h>
 
 #define TAG "InfraredRemote"
 
@@ -73,6 +75,17 @@ InfraredRemoteButton* infrared_remote_get_button(InfraredRemote* remote, size_t 
     return *InfraredButtonArray_get(remote->buttons, index);
 }
 
+bool infrared_remote_find_button_by_name(InfraredRemote* remote, const char* name, size_t* index) {
+    for(size_t i = 0; i < InfraredButtonArray_size(remote->buttons); i++) {
+        InfraredRemoteButton* button = *InfraredButtonArray_get(remote->buttons, i);
+        if(!strcmp(infrared_remote_button_get_name(button), name)) {
+            *index = i;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool infrared_remote_add_button(InfraredRemote* remote, const char* name, InfraredSignal* signal) {
     InfraredRemoteButton* button = infrared_remote_button_alloc();
     infrared_remote_button_set_name(button, name);
@@ -97,7 +110,7 @@ bool infrared_remote_delete_button(InfraredRemote* remote, size_t index) {
 }
 
 bool infrared_remote_store(InfraredRemote* remote) {
-    Storage* storage = furi_record_open("storage");
+    Storage* storage = furi_record_open(RECORD_STORAGE);
     FlipperFormat* ff = flipper_format_file_alloc(storage);
     const char* path = string_get_cstr(remote->path);
 
@@ -121,19 +134,19 @@ bool infrared_remote_store(InfraredRemote* remote) {
     }
 
     flipper_format_free(ff);
-    furi_record_close("storage");
+    furi_record_close(RECORD_STORAGE);
     return success;
 }
 
 bool infrared_remote_load(InfraredRemote* remote, string_t path) {
-    Storage* storage = furi_record_open("storage");
-    FlipperFormat* ff = flipper_format_file_alloc(storage);
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    FlipperFormat* ff = flipper_format_buffered_file_alloc(storage);
 
     string_t buf;
     string_init(buf);
 
     FURI_LOG_I(TAG, "load file: \'%s\'", string_get_cstr(path));
-    bool success = flipper_format_file_open_existing(ff, string_get_cstr(path));
+    bool success = flipper_format_buffered_file_open_existing(ff, string_get_cstr(path));
 
     if(success) {
         uint32_t version;
@@ -161,16 +174,16 @@ bool infrared_remote_load(InfraredRemote* remote, string_t path) {
 
     string_clear(buf);
     flipper_format_free(ff);
-    furi_record_close("storage");
+    furi_record_close(RECORD_STORAGE);
     return success;
 }
 
 bool infrared_remote_remove(InfraredRemote* remote) {
-    Storage* storage = furi_record_open("storage");
+    Storage* storage = furi_record_open(RECORD_STORAGE);
 
     FS_Error status = storage_common_remove(storage, string_get_cstr(remote->path));
     infrared_remote_reset(remote);
 
-    furi_record_close("storage");
+    furi_record_close(RECORD_STORAGE);
     return (status == FSE_OK || status == FSE_NOT_EXIST);
 }

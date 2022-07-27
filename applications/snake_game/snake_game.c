@@ -29,6 +29,8 @@ typedef enum {
     GameStateGameOver,
 } GameState;
 
+// Note: do not change without purpose. Current values are used in smart
+// orthogonality calculation in `snake_game_get_turn_snake`.
 typedef enum {
     DirectionUp,
     DirectionRight,
@@ -103,18 +105,18 @@ static void snake_game_render_callback(Canvas* const canvas, void* ctx) {
     release_mutex((ValueMutex*)ctx, snake_state);
 }
 
-static void snake_game_input_callback(InputEvent* input_event, osMessageQueueId_t event_queue) {
+static void snake_game_input_callback(InputEvent* input_event, FuriMessageQueue* event_queue) {
     furi_assert(event_queue);
 
     SnakeEvent event = {.type = EventTypeKey, .input = *input_event};
-    osMessageQueuePut(event_queue, &event, 0, osWaitForever);
+    furi_message_queue_put(event_queue, &event, FuriWaitForever);
 }
 
-static void snake_game_update_timer_callback(osMessageQueueId_t event_queue) {
+static void snake_game_update_timer_callback(FuriMessageQueue* event_queue) {
     furi_assert(event_queue);
 
     SnakeEvent event = {.type = EventTypeTick};
-    osMessageQueuePut(event_queue, &event, 0, 0);
+    furi_message_queue_put(event_queue, &event, 0);
 }
 
 static void snake_game_init_game(SnakeState* const snake_state) {
@@ -195,44 +197,9 @@ static bool
 }
 
 static Direction snake_game_get_turn_snake(SnakeState const* const snake_state) {
-    switch(snake_state->currentMovement) {
-    case DirectionUp:
-        switch(snake_state->nextMovement) {
-        case DirectionRight:
-            return DirectionRight;
-        case DirectionLeft:
-            return DirectionLeft;
-        default:
-            return snake_state->currentMovement;
-        }
-    case DirectionRight:
-        switch(snake_state->nextMovement) {
-        case DirectionUp:
-            return DirectionUp;
-        case DirectionDown:
-            return DirectionDown;
-        default:
-            return snake_state->currentMovement;
-        }
-    case DirectionDown:
-        switch(snake_state->nextMovement) {
-        case DirectionRight:
-            return DirectionRight;
-        case DirectionLeft:
-            return DirectionLeft;
-        default:
-            return snake_state->currentMovement;
-        }
-    default: // case DirectionLeft:
-        switch(snake_state->nextMovement) {
-        case DirectionUp:
-            return DirectionUp;
-        case DirectionDown:
-            return DirectionDown;
-        default:
-            return snake_state->currentMovement;
-        }
-    }
+    // Sum of two `Direction` lies between 0 and 6, odd values indicate orthogonality.
+    bool is_orthogonal = (snake_state->currentMovement + snake_state->nextMovement) % 2 == 1;
+    return is_orthogonal ? snake_state->nextMovement : snake_state->currentMovement;
 }
 
 static Point snake_game_get_next_step(SnakeState const* const snake_state) {
@@ -316,7 +283,7 @@ int32_t snake_game_app(void* p) {
     UNUSED(p);
     srand(DWT->CYCCNT);
 
-    osMessageQueueId_t event_queue = osMessageQueueNew(8, sizeof(SnakeEvent), NULL);
+    FuriMessageQueue* event_queue = furi_message_queue_alloc(8, sizeof(SnakeEvent));
 
     SnakeState* snake_state = malloc(sizeof(SnakeState));
     snake_game_init_game(snake_state);
@@ -332,21 +299,21 @@ int32_t snake_game_app(void* p) {
     view_port_draw_callback_set(view_port, snake_game_render_callback, &state_mutex);
     view_port_input_callback_set(view_port, snake_game_input_callback, event_queue);
 
-    osTimerId_t timer =
-        osTimerNew(snake_game_update_timer_callback, osTimerPeriodic, event_queue, NULL);
-    osTimerStart(timer, osKernelGetTickFreq() / 4);
+    FuriTimer* timer =
+        furi_timer_alloc(snake_game_update_timer_callback, FuriTimerTypePeriodic, event_queue);
+    furi_timer_start(timer, furi_kernel_get_tick_frequency() / 4);
 
     // Open GUI and register view_port
-    Gui* gui = furi_record_open("gui");
+    Gui* gui = furi_record_open(RECORD_GUI);
     gui_add_view_port(gui, view_port, GuiLayerFullscreen);
 
     SnakeEvent event;
     for(bool processing = true; processing;) {
-        osStatus_t event_status = osMessageQueueGet(event_queue, &event, NULL, 100);
+        FuriStatus event_status = furi_message_queue_get(event_queue, &event, 100);
 
         SnakeState* snake_state = (SnakeState*)acquire_mutex_block(&state_mutex);
 
-        if(event_status == osOK) {
+        if(event_status == FuriStatusOk) {
             // press events
             if(event.type == EventTypeKey) {
                 if(event.input.type == InputTypePress) {
@@ -384,12 +351,12 @@ int32_t snake_game_app(void* p) {
         release_mutex(&state_mutex, snake_state);
     }
 
-    osTimerDelete(timer);
+    furi_timer_free(timer);
     view_port_enabled_set(view_port, false);
     gui_remove_view_port(gui, view_port);
-    furi_record_close("gui");
+    furi_record_close(RECORD_GUI);
     view_port_free(view_port);
-    osMessageQueueDelete(event_queue);
+    furi_message_queue_free(event_queue);
     delete_mutex(&state_mutex);
     free(snake_state);
 

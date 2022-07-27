@@ -4,7 +4,7 @@
 #include <storage/storage.h>
 #include <gui/icon.h>
 #include <gui/icon_i.h>
-#include <furi/dangerous_defines.h>
+#include <core/dangerous_defines.h>
 
 #define SLIDESHOW_MAGIC 0x72676468
 #define SLIDESHOW_MAX_SUPPORTED_VERSION 1
@@ -12,6 +12,7 @@
 struct Slideshow {
     Icon icon;
     uint32_t current_frame;
+    bool loaded;
 };
 
 #pragma pack(push, 1)
@@ -34,6 +35,7 @@ _Static_assert(sizeof(SlideshowFrameHeader) == 2, "Incorrect SlideshowFrameHeade
 
 Slideshow* slideshow_alloc() {
     Slideshow* ret = malloc(sizeof(Slideshow));
+    ret->loaded = false;
     return ret;
 }
 
@@ -50,9 +52,9 @@ void slideshow_free(Slideshow* slideshow) {
 }
 
 bool slideshow_load(Slideshow* slideshow, const char* fspath) {
-    Storage* storage = furi_record_open("storage");
+    Storage* storage = furi_record_open(RECORD_STORAGE);
     File* slideshow_file = storage_file_alloc(storage);
-    bool load_success = false;
+    slideshow->loaded = false;
     do {
         if(!storage_file_open(slideshow_file, fspath, FSAM_READ, FSOM_OPEN_EXISTING)) {
             break;
@@ -80,12 +82,16 @@ bool slideshow_load(Slideshow* slideshow, const char* fspath) {
                frame_header.size) {
                 break;
             }
-            load_success = (frame_idx + 1) == header.frame_count;
+            slideshow->loaded = (frame_idx + 1) == header.frame_count;
         }
     } while(false);
     storage_file_free(slideshow_file);
-    furi_record_close("storage");
-    return load_success;
+    furi_record_close(RECORD_STORAGE);
+    return slideshow->loaded;
+}
+
+bool slideshow_is_loaded(Slideshow* slideshow) {
+    return slideshow->loaded;
 }
 
 bool slideshow_advance(Slideshow* slideshow) {
